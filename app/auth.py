@@ -1,5 +1,7 @@
 """Invite-token auth. ADMIN_TOKEN full access, USER_TOKENS comma list.
-Token via Authorization: Bearer <t> or ?token= or cookie duckai_token."""
+Entries are `name:secret` (preferred) or legacy plain `name` (dev only:
+token `name` or `name-token` works). Token via Authorization: Bearer <t>,
+?token=, or cookie duckai_token."""
 import os
 from fastapi import Request
 
@@ -26,11 +28,13 @@ def identity(req: Request):
         return None
     if t == admin_token():
         return {"user": "admin", "admin": True, "token": t}
-    # USER_TOKENS entries are usernames AND tokens for MVP (alice's token is "alice-token"
-    # or just "alice" in dev). Accept both raw name and name-token forms.
-    for u in user_tokens():
-        if t == u or t == f"{u}-token":
-            return {"user": u, "admin": False, "token": t}
+    for entry in user_tokens():
+        if ":" in entry:
+            name, secret = entry.split(":", 1)
+            if t == secret.strip():
+                return {"user": name.strip(), "admin": False, "token": t}
+        elif t == entry or t == f"{entry}-token":
+            return {"user": entry, "admin": False, "token": t}
     return None
 
 def require_user(req: Request):
