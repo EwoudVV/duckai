@@ -71,7 +71,7 @@ def set_job(jid, **kv):
 def queue_depth():
     with conn() as c:
         r = c.execute(
-            "SELECT COUNT(*) n FROM jobs WHERE status IN ('queued','waiting-approval','reviewing','running')"
+            "SELECT COUNT(*) n FROM jobs WHERE status IN ('queued','waiting-approval','approved','reviewing','running')"
         ).fetchone()
         return r["n"]
 

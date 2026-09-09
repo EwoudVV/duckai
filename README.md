@@ -1,95 +1,90 @@
 # duckai
 
-Shared homelab AI + compute for a few trusted people. One gaming PC, one GPU, no nonsense.
+my old gaming pc is turning into a shared gpu box for a few people. im not using it much so might as well let ppl run stuff on it.
 
-You don't get SSH. You submit code, it gets reviewed (heuristic + local AI), it runs sandboxed with logged internet, you watch logs + GPU stats in the browser.
+site lives on my nest box (always on). the actual gpu runs on my proxmox box at home, which phones home to nest and grabs jobs. so the site stays up even when the gpu box is off or rebooting.
 
-Simple on purpose: FastAPI + SQLite + Docker + vanilla HTML/CSS. No auth provider, no k8s, no framework slop. Fits on a Proxmox VM with GPU passthrough.
+you dont get ssh. you submit code on the site, it gets looked at, then it runs on the gpu box sandboxed. you watch logs on the site.
 
-## How it works, in user eyes
+thats it. fastapi + sqlite + docker. plain html/css, no framework crap.
 
-1. Admin gives you a token + Tailscale access. No public internet.
-2. You open `http://duckai:8000`, paste code or link a branch, pick `offline` / `proxied` network, hit Submit.
-3. Pipeline: `queued -> reviewing -> waiting-approval -> queued -> running -> done/failed/rejected`
-4. You watch live logs, GPU util, queue position. Artifacts (logs, checkpoints, pngs) kept 7 days. Workspace wiped after.
-5. Inference stays separate: Ollama + Open WebUI, same tokens.
+## how it works
 
-## Network modes (you pick per job)
+1. i give you a token. site is tailscale or nest domain only, no open signup.
+2. you go to the site, paste code or upload a .py, pick offline or proxied, hit submit.
+3. it goes `queued -> reviewing -> waiting-approval -> running -> done/failed/rejected`
+4. you watch the log live. files it makes stay for 7 days then gone. workspace gets wiped.
+5. ollama/openwebui for chat stuff is separate, same token.
 
-- `offline` (`--network none`): zero egress. Cannot phone home, cannot get an abuse letter from this job. Use for torch training on pre-cached models/datasets.
-- `proxied` (default): container has no direct 80/443. Only `HTTP_PROXY=http://squid:3128` works. Squid allowlists + logs every domain per job/user. SMTP/SSH/Tor blocked at host firewall. General-purpose (`pip install`, `hf download`) but residual risk remains: someone *can* tunnel bad stuff over allowed HTTPS if they really want to. Logs tie it to a user so you can ban.
-- `open`: direct internet. Don't use unless you accept the risk. Disabled by default, admin-only flag.
+## the two boxes
 
-There is no zero-risk compute with internet. If you need zero risk, use `offline`. See `docs/THREATMODEL.md`.
+- `nest` (ssh duck@hackclub.app): just the website + queue + logs. no gpu, no docker, nothing heavy. `RUNNER_ENABLED=false` here.
+- `gpu box` (proxmox vm at home): runs `scripts/remote-worker.py`, polls nest, runs jobs in docker with the gpu, posts logs back. this is the only place that runs untrusted code.
 
-## Quickstart (on the Proxmox VM host)
+## net modes (pick per job)
 
+- `offline`: no internet at all in the container. safest. use this for torch training if you already have the model/dataset baked in.
+- `proxied`: has to go through squid proxy. it allowlists github/pypi/huggingface/ubuntu and logs every domain per user/job. normal `pip install` and `hf download` work. not zero risk though, someone determined could still tunnel junk over allowed https. thats why everything is logged to a user.
+- `open`: direct internet. off by default, dont ask unless you have a reason.
+
+no zero-risk compute with internet, thats just how it is. if you want zero risk use offline.
+
+## running it
+
+on nest (website only):
 ```bash
-# 1. host prep (docker + nvidia toolkit + firewall + squid net)
-sudo bash scripts/install.sh
-sudo bash scripts/firewall.sh
-
-# 2. configure
+git clone https://github.com/EwoudVV/duckai ~/duckai
+cd ~/duckai
+bash scripts/nest-install.sh
 cp .env.example .env
-# edit: ADMIN_TOKEN, USER_TOKENS, OLLAMA_URL, NET_DEFAULT=proxied
-
-# 3. run
-docker compose up --build -d
-# open http://<tailscale-ip>:8000, enter your token
+# edit .env: ADMIN_TOKEN, USER_TOKENS, RUNNER_ENABLED=false, WORKER_TOKEN=some-long-random
+systemctl --user enable --now duckai
+# in nest dashboard -> domains, add your subdomain + custom duckduckai.duckdns.org
 ```
 
-Local dev without GPU/docker:
+duckdns updater (on nest, cron, token from env not repo):
+```bash
+export DUCKDNS_TOKEN=xxxx  # regenerate yours first, you posted it public
+bash scripts/duckdns-update.sh duckduckai
+```
 
+on gpu box (the runner):
+```bash
+git clone https://github.com/EwoudVV/duckai ~/duckai
+cd ~/duckai
+sudo bash scripts/install.sh
+sudo bash scripts/firewall.sh
+cp .env.example .env
+# edit .env: WEB_BASE_URL=https://duckduckai.duckdns.org, WORKER_TOKEN=same-as-nest, RUNNER_BASE_IMAGE=duckai-base
+python3 scripts/remote-worker.py
+```
+
+local laptop dev (dont host here, its not stable):
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-ADMIN_TOKEN=admin USER_TOKENS=alice,bob RUNNER_MODE=subprocess uvicorn app.main:app --reload
+ADMIN_TOKEN=admin USER_TOKENS=alice,bob RUNNER_MODE=subprocess RUNNER_ENABLED=true uvicorn app.main:app --reload
 ```
 
-## Repo layout
+## submitting
 
-```
-app/main.py    routes + UI wiring
-app/db.py      sqlite (jobs, tokens, usage)
-app/auth.py    bearer/cookie tokens, admin vs user
-app/review.py  heuristic + Ollama review, score + reasons
-app/runner.py  background worker: docker/subprocess, timeouts, log capture
-app/stats.py   nvidia-smi poll, queue counts, per-user usage
-templates/     vanilla jinja pages (base, index, submit, job, stats)
-static/style.css  one stylesheet, system fonts, 720px max-width
-runner/base.Dockerfile  baked torch+cuda base for jobs
-squid/squid.conf  allowlist + per-job logging
-scripts/install.sh firewall.sh  host setup
-docs/THREATMODEL.md OPERATIONS.md
-```
-
-## Job submission
-
-Web form or API:
-
+web form, or:
 ```bash
-curl -H "Authorization: Bearer alice-token" -F "code=@main.py" \
-  -F "requirements=@requirements.txt" -F "net=proxied" -F "title=my-run" \
-  http://duckai:8000/api/jobs
+curl -H "Authorization: Bearer alice-token" -F "code=@main.py" -F "title=my-run" -F "net=proxied" https://duckduckai.duckdns.org/api/jobs
 ```
 
-`run.yaml` (optional, in upload or repo):
+optional `run.yaml` next to your code:
 ```yaml
 entry: main.py
 args: --epochs 2
 minutes_limit: 120
-memory: 12g
-cpus: 4
-dataset: cifar10  # must be pre-cached for offline
 ```
 
-## Rules (shown on site)
+## rules
 
-- invite-only, everything logged: code, domains hit, GPU-minutes, by user
-- no SMTP, no port scanning, no mining, no hosting phishing/malware
-- 1 running job each, 2h default limit, workspace wiped
-- break it -> token revoked, job killed, snapshot restore
+invite only. i log code, domains hit, logs, gpu minutes, all tied to your name. no expectation of privacy on this box.
+no spam, no scanning, no miners, no phishing/malware hosting.
+1 running job each, 2h default.
+break it and i revoke your token and restore snapshot. dont make me do that.
 
-## License
-
-MIT.
+mit.

@@ -71,6 +71,9 @@ def process_one(jid) -> bool:
     if score >= auto:
         db.set_job(jid, status="waiting-approval")
         return True
+    if os.environ.get("RUNNER_ENABLED", "true").lower() in ("0", "false", "no"):
+        db.set_job(jid, status="approved")
+        return True
     return run_job(jid)
 
 def run_job(jid) -> bool:
@@ -176,17 +179,22 @@ def loop():
     if _running:
         return
     _running = True
+    local_run = os.environ.get("RUNNER_ENABLED", "true").lower() not in ("0", "false", "no")
     while True:
         try:
             jobs = db.list_jobs(50)
-            # run oldest queued first
+            # phase 1 (always, even on nest): review anything queued
             for j in sorted([x for x in jobs if x["status"] == "queued"], key=lambda x: x["id"]):
-                # one running job per user, one GPU => one running total for MVP
-                if db.running_for_user(j["user"]) >= int(os.environ.get("MAX_JOBS_PER_USER_RUNNING", "1")):
-                    continue
-                if any(x["status"] == "running" for x in db.list_jobs(20)):
-                    break
                 process_one(j["id"])
+            # phase 2 (gpu box / dev only): run approved locally, one at a time
+            if local_run:
+                jobs = db.list_jobs(50)
+                if not any(x["status"] == "running" for x in jobs):
+                    ready = sorted([x for x in jobs if x["status"] == "approved"], key=lambda x: x["id"])
+                    if ready:
+                        j = ready[0]
+                        if db.running_for_user(j["user"]) < int(os.environ.get("MAX_JOBS_PER_USER_RUNNING", "1")):
+                            run_job(j["id"])
         except Exception:
             pass
         time.sleep(3)

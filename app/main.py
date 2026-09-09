@@ -111,10 +111,8 @@ def approve(req: Request, jid: int):
         return PlainTextResponse("admin only", status_code=403)
     job = db.get_job(jid)
     if job and job["status"] == "waiting-approval":
-        db.set_job(jid, status="queued")
-        # runner loop picks it up; fast-path:
-        import threading
-        threading.Thread(target=run_job, args=(jid,), daemon=True).start()
+        db.set_job(jid, status="approved")
+        # local loop or remote gpu worker picks up `approved`
     return RedirectResponse(f"/job/{jid}?token={ident['token']}", status_code=303)
 
 @app.post("/job/{jid}/kill")
@@ -162,3 +160,52 @@ def api_job(req: Request, jid: int):
         return JSONResponse({"err": "auth"}, status_code=401)
     job = db.get_job(jid)
     return job or JSONResponse({"err": "not found"}, status_code=404)
+
+def is_worker(req: Request):
+    t = req.headers.get("authorization", "")
+    tok = t[7:].strip() if t.lower().startswith("bearer ") else req.query_params.get("token", "")
+    wt = os.environ.get("WORKER_TOKEN", "")
+    return bool(wt) and tok == wt
+
+@app.get("/api/worker/next")
+def worker_next(req: Request):
+    if not is_worker(req):
+        return JSONResponse({"err": "auth"}, status_code=401)
+    for j in sorted(db.list_jobs(50), key=lambda x: x["id"]):
+        if j["status"] == "approved":
+            db.set_job(j["id"], status="running", started=time.time())
+            return db.get_job(j["id"])
+    return {"none": True}
+
+@app.get("/api/worker/job/{jid}/files")
+def worker_files(req: Request, jid: int):
+    if not is_worker(req):
+        return JSONResponse({"err": "auth"}, status_code=401)
+    from .runner import job_dir
+    d = job_dir(jid)
+    out = {}
+    for name in ("code.py", "requirements.txt", "run.yaml"):
+        p = d / name
+        out[name] = p.read_text(errors="replace")[:500_000] if p.exists() else ""
+    job = db.get_job(jid)
+    return {"job": job, "files": out}
+
+@app.post("/api/worker/job/{jid}/result")
+async def worker_result(req: Request, jid: int):
+    if not is_worker(req):
+        return JSONResponse({"err": "auth"}, status_code=401)
+    body = await req.json()
+    log = (body.get("log") or "")[-2_000_000:]
+    from .runner import job_dir
+    d = job_dir(jid)
+    (d / "stdout.log").write_text(log)
+    job = db.get_job(jid)
+    if job:
+        mins = body.get("minutes", 1)
+        try:
+            db.add_usage(job["user"], int(mins))
+        except Exception:
+            pass
+        db.set_job(jid, status=body.get("status", "done"),
+                   exit_code=int(body.get("exit_code", 0)), ended=time.time())
+    return {"ok": True}
