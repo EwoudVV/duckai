@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block t %}- jobs{% endblock %}{% block b %}
+<div class="card">queue: <b>{{ queue }}</b> &nbsp; gpu: {% if gpu.present %}<b>{{ gpu.util }}%</b> {{ gpu.mem_used }}/{{ gpu.mem_total }}MB {{ gpu.temp }}C{% else %}<span class="muted">no nvidia-smi (dev)</span>{% endif %}</div>
+<table><tr><th>id</th><th>title</th><th>user</th><th>net</th><th>status</th><th>score</th></tr>
+{% for j in jobs %}<tr><td><a href="/job/{{ j.id }}">{{ j.id }}</a></td><td>{{ j.title }}</td><td>{{ j.user }}</td><td>{{ j.net }}</td>
+<td><span class="pill {{ j.status }}">{{ j.status }}</span></td><td>{{ j.score }}</td></tr>{% endfor %}</table>
+{% endblock %}

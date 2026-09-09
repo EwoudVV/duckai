@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block t %}- stats{% endblock %}{% block b %}
+<h3>stats</h3>
+<div class="card">queue depth: <b>{{ queue }}</b><br>
+gpu: {% if gpu.present %}{{ gpu.util }}% · {{ gpu.mem_used }}/{{ gpu.mem_total }}MB · {{ gpu.temp }}C{% else %}no GPU on this host{% endif %}</div>
+<h4>usage per user</h4>
+<table><tr><th>user</th><th>gpu-min</th><th>jobs</th></tr>
+{% for u in usage %}<tr><td>{{ u.user }}</td><td>{{ u.gpu_minutes }}</td><td>{{ u.jobs_run }}</td></tr>{% endfor %}</table>
+<p class="muted">squid domain logs: <code>./data/squid-logs/access.log</code> (per-job user agent DUCKAI_USER/DUCKAI_JOB)</p>
+{% endblock %}

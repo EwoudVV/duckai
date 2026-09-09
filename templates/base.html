@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>duckai {% block t %}{% endblock %}</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><div class="wrap">
+<header><b>duckai</b><span class="muted">shared homelab compute</span>
+<nav>{% if me %}<span>{{ me.user }}{% if me.admin %} (admin){% endif %}</span><a href="/">jobs</a><a href="/submit">submit</a><a href="/stats">stats</a><a href="/logout">logout</a>{% endif %}</nav></header>
+{% block b %}{% endblock %}
+<p class="muted">invite-only. code, domains, logs + gpu-minutes recorded per user. offline = no egress. proxied = allowlisted + logged. <a href="https://github.com/EwoudVV/duckai">repo</a></p>
+</div>{% block js %}{% endblock %}</body></html>

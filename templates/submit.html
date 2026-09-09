@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block t %}- submit{% endblock %}{% block b %}
+<h3>new job</h3>
+<form method="post" action="/submit" enctype="multipart/form-data">
+<label>title</label><input name="title" value="my-run">
+<div class="grid2"><div><label>network</label><select name="net">
+<option value="proxied" selected>proxied (general, logged)</option>
+<option value="offline">offline (no egress, safest)</option>
+<option value="open">open (admin-gated)</option></select></div>
+<div><label>or upload .py</label><input type="file" name="codefile"></div></div>
+<label>code (main.py)</label><textarea name="code">print("hello from duckai")
+</textarea>
+<label>requirements.txt (optional)</label><textarea name="requirements" style="min-height:60px"></textarea>
+<label>run.yaml (optional)</label><textarea name="runyaml" style="min-height:60px">net: proxied
+minutes_limit: 120
+args:
+</textarea>
+<p><button>submit</button></p></form>
+<p class="muted">1 running job per user, 2h default. Workspace wiped after. Everything logged.</p>
+{% endblock %}
