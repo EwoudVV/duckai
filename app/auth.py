@@ -31,8 +31,10 @@ def identity(req: Request):
     for entry in user_tokens():
         if ":" in entry:
             name, secret = entry.split(":", 1)
-            if t == secret.strip():
-                return {"user": name.strip(), "admin": False, "token": t}
+            name, secret = name.strip(), secret.strip()
+            # token IS the full "name:secret" string (secret-only also accepted)
+            if t == entry.strip() or t == secret:
+                return {"user": name, "admin": False, "token": t}
         elif t == entry or t == f"{entry}-token":
             return {"user": entry, "admin": False, "token": t}
     return None
