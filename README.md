@@ -44,7 +44,7 @@ systemctl --user enable --now duckai
 
 duckdns updater (on nest, cron, token from env not repo):
 ```bash
-export DUCKDNS_TOKEN=xxxx  # regenerate yours first, you posted it public
+export DUCKDNS_TOKEN=xxxx  # yours from duckdns.org, env only, never in the repo
 bash scripts/duckdns-update.sh duckduckai
 ```
 
