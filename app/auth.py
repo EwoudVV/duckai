@@ -18,6 +18,12 @@ def token_names():
         names.append(entry.split(":", 1)[0].strip() if ":" in entry else entry)
     return names
 
+def token_map():
+    m = {}
+    for entry in user_tokens():
+        m[entry.split(":", 1)[0].strip() if ":" in entry else entry] = entry
+    return m
+
 def extract_token(req: Request) -> str:
     auth = req.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):

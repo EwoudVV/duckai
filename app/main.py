@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import db
-from .auth import require_user, token_names
+from .auth import require_user, token_names, token_map
 from .runner import start as runner_start, job_dir, run_job
 from .stats import gpu
 
@@ -22,8 +22,14 @@ async def track(req: Request, call_next):
     try:
         if not req.url.path.startswith("/static"):
             ident = require_user(req)
-            if ident and not ident["admin"]:
-                db.touch_user(ident["user"])
+            if ident:
+                if not ident["admin"]:
+                    db.touch_user(ident["user"])
+                # any valid visit (?token= link, header, form) refreshes the
+                # persistent cookie, so login survives reloads until logout
+                if req.cookies.get("duckai_token", "") != ident["token"]:
+                    resp.set_cookie("duckai_token", ident["token"], httponly=True,
+                                    samesite="lax", max_age=31536000, path="/")
     except Exception:
         pass
     return resp
@@ -55,7 +61,8 @@ def index(req: Request):
 @app.post("/login")
 def login(token: str = Form("")):
     r = RedirectResponse("/", status_code=303)
-    r.set_cookie("duckai_token", token.strip(), httponly=True, samesite="lax")
+    r.set_cookie("duckai_token", token.strip(), httponly=True, samesite="lax",
+                 max_age=31536000, path="/")
     return r
 
 @app.get("/logout")
@@ -168,12 +175,13 @@ def admin_page(req: Request):
         db.ensure_user(n)
     rows = {r["user"]: r for r in db.user_rows()}
     counts = db.job_counts()
+    tm = token_map()
     now = time.time()
     users = []
     for n in token_names():
         r = rows.get(n, {"label": "", "last_seen": 0, "gpu_minutes": 0, "jobs_run": 0})
         jc = counts.get(n, {})
-        users.append({"name": n, "label": r["label"], "seen": ago(r["last_seen"], now),
+        users.append({"name": n, "token": tm.get(n, ""), "label": r["label"], "seen": ago(r["last_seen"], now),
                       "gpu": r["gpu_minutes"], "runs": r["jobs_run"],
                       "jobs": sum(jc.values()), "detail": ", ".join(f"{k}:{v}" for k, v in sorted(jc.items())) or "-"})
     return templates.TemplateResponse(req, "admin.html", {"me": ident, "users": users})
