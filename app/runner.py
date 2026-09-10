@@ -83,19 +83,22 @@ def run_job(jid) -> bool:
     d = job_dir(jid)
     cfg = _parse_run_yaml(d)
     minutes = int(cfg.get("minutes_limit", DEFAULT_MIN))
-    entry = cfg.get("entry", "main.py")
     args = cfg.get("args", "")
-    # normalize: web form stores as code.py; allow entry alias
-    if entry != "code.py" and (d / entry).exists():
-        shutil.copy(d / entry, d / "code.py")
+    command = cfg.get("command", "")
+    if not command:
+        entry = cfg.get("entry", "code.py")
+        if entry != "code.py" and (d / entry).exists():
+            shutil.copy(d / entry, d / "code.py")
+        command = "python code.py"
+    full = command + (f" {args}" if args else "")
     mode = os.environ.get("RUNNER_MODE", "docker")
     db.set_job(jid, status="running", started=time.time())
     logf = d / "stdout.log"
     try:
         if mode == "docker":
-            _run_docker(jid, d, job, minutes, args, logf)
+            _run_docker(jid, d, job, minutes, full, logf)
         else:
-            _run_subprocess(jid, d, job, minutes, args, logf)
+            _run_subprocess(jid, d, job, minutes, full, logf)
     except Exception as e:
         with open(logf, "a") as f:
             f.write(f"\n[runner error] {e}\n")
@@ -103,12 +106,12 @@ def run_job(jid) -> bool:
         return True
     return True
 
-def _docker_cmd(jid, d: Path, job: dict, minutes: int, args: str):
+def _docker_cmd(jid, d: Path, job: dict, minutes: int, full: str):
     net = job["net"]
     mem = os.environ.get("JOB_MEMORY", "12g")
     cpus = os.environ.get("JOB_CPUS", "4")
     name = f"duckai-{jid}"
-    inner = f"pip install -q -r /w/requirements.txt 2>&1 | tail -5; python /w/code.py {args} 2>&1"
+    inner = f"if [ -s /w/requirements.txt ]; then pip install -q -r /w/requirements.txt 2>&1 | tail -5; fi; {full} 2>&1"
     # offline: no network at all, no pip. proxied: bridge + proxy env (squid logs).
     cmd = ["docker", "run", "--rm", "--name", name,
            "--memory", mem, "--cpus", cpus, "--pids-limit", "512",
@@ -126,7 +129,7 @@ def _docker_cmd(jid, d: Path, job: dict, minutes: int, args: str):
     cmd += [BASE_IMAGE, "bash", "-c", inner]
     return cmd, minutes * 60
 
-def _run_docker(jid, d, job, minutes, args, logf):
+def _run_docker(jid, d, job, minutes, full, logf):
     cmd, timeout = _docker_cmd(jid, d, job, minutes, args)
     start = time.time()
     with open(logf, "w") as f:
@@ -148,7 +151,7 @@ def _run_docker(jid, d, job, minutes, args, logf):
         logf.write_text("...[truncated]...\n" + txt)
     db.set_job(jid, status="done" if code == 0 else "failed", exit_code=code, ended=time.time())
 
-def _run_subprocess(jid, d, job, minutes, args, logf):
+def _run_subprocess(jid, d, job, minutes, full, logf):
     # dev fallback: runs locally with timeout. Still honors offline by stripping proxy env.
     env = dict(os.environ)
     if job["net"] == "offline":
@@ -160,7 +163,7 @@ def _run_subprocess(jid, d, job, minutes, args, logf):
     with open(logf, "w") as f:
         f.write(f"[dev-run net={job['net']} user={job['user']}]\n\n")
     try:
-        p = subprocess.run(["python3", "code.py"] + args.split(),
+        p = subprocess.run(["bash", "-c", full],
                            cwd=d, capture_output=True, text=True,
                            timeout=minutes * 60, env=env)
         with open(logf, "a") as f:

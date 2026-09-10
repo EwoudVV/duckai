@@ -25,6 +25,13 @@ def run_one(job):
         d = Path(tmp)
         (d / "code.py").write_text(files.get("code.py", ""))
         (d / "requirements.txt").write_text(files.get("requirements.txt", ""))
+        ry = files.get("run.yaml", "")
+        cmd_line = "python code.py"
+        for line in ry.splitlines():
+            if line.strip().startswith("command:"):
+                cmd_line = line.split(":", 1)[1].strip()
+                break
+        inner = f"if [ -s /w/requirements.txt ]; then pip install -q -r /w/requirements.txt 2>&1 | tail -3; fi; {cmd_line} 2>&1"
         net = job.get("net", "proxied")
         cmd = ["docker", "run", "--rm", "--memory", "12g", "--cpus", "4",
                "--pids-limit", "512", "--security-opt", "no-new-privileges:true",

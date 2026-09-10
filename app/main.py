@@ -1,6 +1,9 @@
 """duckai web: dashboard, submit, job view, stats, tiny JSON API."""
+import json
 import os
+import re
 import time
+import urllib.request
 from pathlib import Path
 from fastapi import FastAPI, Request, Form, UploadFile, File, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, PlainTextResponse
@@ -78,7 +81,7 @@ def submit_page(req: Request):
         return RedirectResponse("/")
     return templates.TemplateResponse(req, "submit.html", {"me": ident})
 
-def save_submission(jid, code_text, code_file, requirements, runyaml):
+def save_submission(jid, code_text, code_file, requirements, runyaml, command=""):
     d = job_dir(jid)
     if code_file is not None and getattr(code_file, "filename", ""):
         data = code_file.file.read().decode(errors="replace")
@@ -86,19 +89,23 @@ def save_submission(jid, code_text, code_file, requirements, runyaml):
     else:
         (d / "code.py").write_text((code_text or "")[:500_000])
     (d / "requirements.txt").write_text((requirements or "")[:20_000])
-    if runyaml:
-        (d / "run.yaml").write_text(runyaml[:5_000])
+    ry = runyaml or ""
+    if command and not re.search(r"^command\s*:", ry, re.M):
+        ry = ((ry.rstrip() + "\n") if ry.strip() else "") + f"command: {command}\n"
+    if ry:
+        (d / "run.yaml").write_text(ry[:5_000])
 
 @app.post("/submit")
 def submit(req: Request, title: str = Form("untitled"), net: str = Form("proxied"),
            code: str = Form(""), requirements: str = Form(""), runyaml: str = Form(""),
+           command: str = Form("python code.py"),
            codefile: UploadFile = File(None)):
     ident = require_user(req)
     if not ident:
         return RedirectResponse("/")
     net = net if net in ("offline", "proxied", "open") else "proxied"
     jid = db.create_job(title[:80] or "untitled", ident["user"], net)
-    save_submission(jid, code, codefile, requirements, runyaml or f"net: {net}\n")
+    save_submission(jid, code, codefile, requirements, runyaml or f"net: {net}\n", command[:500])
     return RedirectResponse(f"/job/{jid}?token={ident['token']}", status_code=303)
 
 @app.get("/job/{jid}", response_class=HTMLResponse)
@@ -151,7 +158,8 @@ def stats_page(req: Request):
         return RedirectResponse("/")
     return templates.TemplateResponse(req, "stats.html", {
         "me": ident, "gpu": gpu(),
-        "usage": db.usage_all(), "queue": db.queue_depth(),
+        "usage": [u for u in db.usage_all() if u["last_seen"]],
+        "queue": db.queue_depth(),
     })
 
 def ago(ts, now):
@@ -205,13 +213,14 @@ def api_jobs(req: Request):
 @app.post("/api/jobs")
 def api_submit(req: Request, title: str = Form("untitled"), net: str = Form("proxied"),
                code: str = Form(""), requirements: str = Form(""), runyaml: str = Form(""),
+               command: str = Form("python code.py"),
                codefile: UploadFile = File(None)):
     ident = require_user(req)
     if not ident:
         return JSONResponse({"err": "auth"}, status_code=401)
     net = net if net in ("offline", "proxied", "open") else "proxied"
     jid = db.create_job(title[:80] or "untitled", ident["user"], net)
-    save_submission(jid, code, codefile, requirements, runyaml or f"net: {net}\n")
+    save_submission(jid, code, codefile, requirements, runyaml or f"net: {net}\n", command[:500])
     return {"id": jid, "url": f"/job/{jid}"}
 
 @app.get("/api/job/{jid}")
