@@ -6,8 +6,6 @@ site lives on my nest box (always on). the actual gpu runs on my proxmox box at 
 
 you dont get ssh. you submit code on the site, it gets looked at, then it runs on the gpu box sandboxed. you watch logs on the site.
 
-thats it. fastapi + sqlite + docker. plain html/css, no framework crap.
-
 ## how it works
 
 1. i give you a token. site is tailscale or nest domain only, no open signup.
