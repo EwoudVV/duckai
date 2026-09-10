@@ -8,13 +8,25 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import db
-from .auth import require_user
+from .auth import require_user, token_names
 from .runner import start as runner_start, job_dir, run_job
 from .stats import gpu
 
 app = FastAPI(title="duckai")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+@app.middleware("http")
+async def track(req: Request, call_next):
+    resp = await call_next(req)
+    try:
+        if not req.url.path.startswith("/static"):
+            ident = require_user(req)
+            if ident and not ident["admin"]:
+                db.touch_user(ident["user"])
+    except Exception:
+        pass
+    return resp
 
 @app.on_event("startup")
 def _startup():
@@ -134,6 +146,46 @@ def stats_page(req: Request):
         "me": ident, "gpu": gpu(),
         "usage": db.usage_all(), "queue": db.queue_depth(),
     })
+
+def ago(ts, now):
+    if not ts:
+        return "never"
+    d = int(now - ts)
+    if d < 60:
+        return "just now"
+    if d < 3600:
+        return f"{d // 60}m ago"
+    if d < 86400:
+        return f"{d // 3600}h ago"
+    return f"{d // 86400}d ago"
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(req: Request):
+    ident = require_user(req)
+    if not ident or not ident["admin"]:
+        return PlainTextResponse("admin only", status_code=403)
+    for n in token_names():
+        db.ensure_user(n)
+    rows = {r["user"]: r for r in db.user_rows()}
+    counts = db.job_counts()
+    now = time.time()
+    users = []
+    for n in token_names():
+        r = rows.get(n, {"label": "", "last_seen": 0, "gpu_minutes": 0, "jobs_run": 0})
+        jc = counts.get(n, {})
+        users.append({"name": n, "label": r["label"], "seen": ago(r["last_seen"], now),
+                      "gpu": r["gpu_minutes"], "runs": r["jobs_run"],
+                      "jobs": sum(jc.values()), "detail": ", ".join(f"{k}:{v}" for k, v in sorted(jc.items())) or "-"})
+    return templates.TemplateResponse(req, "admin.html", {"me": ident, "users": users})
+
+@app.post("/admin/label")
+def admin_label(req: Request, user: str = Form(""), label: str = Form("")):
+    ident = require_user(req)
+    if not ident or not ident["admin"]:
+        return PlainTextResponse("admin only", status_code=403)
+    if user in token_names():
+        db.set_label(user, label)
+    return RedirectResponse("/admin", status_code=303)
 
 # --- JSON API (same tokens) ---
 @app.get("/api/jobs")

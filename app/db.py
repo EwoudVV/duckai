@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS usage (
   user TEXT PRIMARY KEY,
   gpu_minutes INTEGER DEFAULT 0,
-  jobs_run INTEGER DEFAULT 0
+  jobs_run INTEGER DEFAULT 0,
+  label TEXT DEFAULT '',
+  last_seen REAL DEFAULT 0
 );
 """
 
@@ -39,6 +41,11 @@ def conn():
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(usage)")}
+        if "label" not in cols:
+            c.execute("ALTER TABLE usage ADD COLUMN label TEXT DEFAULT ''")
+        if "last_seen" not in cols:
+            c.execute("ALTER TABLE usage ADD COLUMN last_seen REAL DEFAULT 0")
 
 def create_job(title, user, net):
     now = time.time()
@@ -96,3 +103,29 @@ def add_usage(user, minutes, ran=1):
 def usage_all():
     with conn() as c:
         return [dict(r) for r in c.execute("SELECT * FROM usage ORDER BY gpu_minutes DESC")]
+
+def ensure_user(user):
+    with conn() as c:
+        c.execute("INSERT OR IGNORE INTO usage (user) VALUES (?)", (user,))
+
+def touch_user(user):
+    ensure_user(user)
+    with conn() as c:
+        c.execute("UPDATE usage SET last_seen=? WHERE user=?", (time.time(), user))
+
+def set_label(user, label):
+    ensure_user(user)
+    with conn() as c:
+        c.execute("UPDATE usage SET label=? WHERE user=?", (label[:40], user))
+
+def user_rows():
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM usage")]
+
+def job_counts():
+    with conn() as c:
+        rows = c.execute("SELECT user, status, COUNT(*) n FROM jobs GROUP BY user, status").fetchall()
+        out = {}
+        for r in rows:
+            out.setdefault(r["user"], {})[r["status"]] = r["n"]
+        return out

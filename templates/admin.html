@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block t %}- admin{% endblock %}{% block b %}
+<h3>tokens ({{ users|length }})</h3>
+<p class="muted">label who got what. last seen updates on every page they open. only you see this page.</p>
+<table><tr><th>token</th><th>who</th><th>last seen</th><th>jobs</th><th>gpu-min</th><th></th></tr>
+{% for u in users %}<tr><td><code>{{ u.name }}</code></td>
+<td>{% if u.label %}<b>{{ u.label }}</b>{% else %}<span class="muted">free</span>{% endif %}</td>
+<td>{{ u.seen }}</td><td title="{{ u.detail }}">{{ u.jobs }}</td><td>{{ u.gpu }}</td>
+<td><form method="post" action="/admin/label" style="display:flex;gap:4px"><input type="hidden" name="user" value="{{ u.name }}"><input name="label" value="{{ u.label }}" placeholder="name" style="width:110px;padding:2px 6px"><button style="padding:2px 8px">set</button></form></td></tr>{% endfor %}</table>
+{% endblock %}

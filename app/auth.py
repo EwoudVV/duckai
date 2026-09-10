@@ -12,6 +12,12 @@ def user_tokens():
     raw = os.environ.get("USER_TOKENS", "")
     return [t.strip() for t in raw.split(",") if t.strip()]
 
+def token_names():
+    names = []
+    for entry in user_tokens():
+        names.append(entry.split(":", 1)[0].strip() if ":" in entry else entry)
+    return names
+
 def extract_token(req: Request) -> str:
     auth = req.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
