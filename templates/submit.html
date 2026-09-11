@@ -7,12 +7,15 @@
 <option value="offline">offline (no egress, safest)</option>
 <option value="open">open (admin-gated)</option></select></div>
 <div><label>or upload .py</label><input type="file" name="codefile"></div></div>
-<label>code (main.py)</label><textarea name="code">print("hello from duckai")
+<label>code</label><textarea name="code">print("hello from duckai")
 </textarea>
+<label>command (optional, runs instead of python code.py — e.g. node server.js, bash run.sh)</label><input name="command" value="" placeholder="python code.py">
 <label>requirements.txt (optional)</label><textarea name="requirements" style="min-height:60px"></textarea>
-<label>run.yaml (optional)</label><textarea name="runyaml" style="min-height:60px">net: proxied
+<label>run.yaml (optional)</label><textarea name="runyaml" style="min-height:80px">net: proxied
 minutes_limit: 120
+runtime: python
 args:
+# entry: main.js
 </textarea>
 <p><button>submit</button></p></form>
 <p class="muted">1 running job per user, 2h default. Workspace wiped after. Everything logged.</p>

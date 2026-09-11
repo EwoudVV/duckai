@@ -49,12 +49,21 @@ def ident_or_login(req: Request, tmpl: str):
         return None
     return ident
 
+def can_see(ident, job):
+    return ident["admin"] or job["user"] == ident["user"]
+
+def visible_jobs(ident, limit=100):
+    jobs = db.list_jobs(limit)
+    if ident["admin"]:
+        return jobs
+    return [j for j in jobs if j["user"] == ident["user"]]
+
 @app.get("/", response_class=HTMLResponse)
 def index(req: Request):
     ident = require_user(req)
     if not ident:
         return templates.TemplateResponse(req, "login.html", {})
-    jobs = db.list_jobs(50)
+    jobs = visible_jobs(ident, 50)
     return templates.TemplateResponse(req, "index.html", {
         "me": ident, "jobs": jobs,
         "queue": db.queue_depth(), "gpu": gpu(),
@@ -114,7 +123,7 @@ def job_page(req: Request, jid: int):
     if not ident:
         return RedirectResponse("/")
     job = db.get_job(jid)
-    if not job:
+    if not job or not can_see(ident, job):
         return PlainTextResponse("no such job", status_code=404)
     d = job_dir(jid)
     log = (d / "stdout.log").read_text(errors="replace")[-30_000:] if (d / "stdout.log").exists() else "(no logs yet)"
@@ -126,6 +135,9 @@ def job_log(req: Request, jid: int):
     ident = require_user(req)
     if not ident:
         return JSONResponse({"err": "auth"}, status_code=401)
+    job = db.get_job(jid)
+    if not job or not can_see(ident, job):
+        return JSONResponse({"err": "not found"}, status_code=404)
     d = job_dir(jid)
     p = d / "stdout.log"
     return PlainTextResponse(p.read_text(errors="replace")[-100_000:] if p.exists() else "(no logs yet)")
@@ -206,9 +218,10 @@ def admin_label(req: Request, user: str = Form(""), label: str = Form("")):
 # --- JSON API (same tokens) ---
 @app.get("/api/jobs")
 def api_jobs(req: Request):
-    if not require_user(req):
+    ident = require_user(req)
+    if not ident:
         return JSONResponse({"err": "auth"}, status_code=401)
-    return db.list_jobs(100)
+    return visible_jobs(ident, 100)
 
 @app.post("/api/jobs")
 def api_submit(req: Request, title: str = Form("untitled"), net: str = Form("proxied"),
@@ -225,10 +238,13 @@ def api_submit(req: Request, title: str = Form("untitled"), net: str = Form("pro
 
 @app.get("/api/job/{jid}")
 def api_job(req: Request, jid: int):
-    if not require_user(req):
+    ident = require_user(req)
+    if not ident:
         return JSONResponse({"err": "auth"}, status_code=401)
     job = db.get_job(jid)
-    return job or JSONResponse({"err": "not found"}, status_code=404)
+    if not job or not can_see(ident, job):
+        return JSONResponse({"err": "not found"}, status_code=404)
+    return job
 
 def is_worker(req: Request):
     t = req.headers.get("authorization", "")

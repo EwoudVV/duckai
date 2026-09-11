@@ -17,6 +17,29 @@ def api(path, data=None, method="GET"):
     with urllib.request.urlopen(req, data=body, timeout=30) as r:
         return json.loads(r.read().decode() or "{}")
 
+def parse_run_yaml(text):
+    out = {}
+    for line in (text or "").splitlines():
+        if ":" in line and not line.strip().startswith("#"):
+            k, v = line.split(":", 1)
+            out[k.strip()] = v.strip().strip("'\"")
+    return out
+
+def runtime_images():
+    import os as _os
+    m = {}
+    for item in _os.environ.get("RUNNER_RUNTIMES", "").split(","):
+        item = item.strip()
+        if "=" in item:
+            k, v = item.split("=", 1)
+            m[k.strip()] = v.strip()
+    m.setdefault("python", BASE)
+    m.setdefault("node", "node:22-slim")
+    m.setdefault("bash", "ubuntu:22.04")
+    return m
+
+EXT_RUNTIME = {".py": "python", ".js": "node", ".mjs": "node", ".sh": "bash"}
+
 def run_one(job):
     jid = job["id"]
     print(f"job {jid} {job['title']} net={job['net']}", flush=True)
@@ -25,13 +48,22 @@ def run_one(job):
         d = Path(tmp)
         (d / "code.py").write_text(files.get("code.py", ""))
         (d / "requirements.txt").write_text(files.get("requirements.txt", ""))
-        ry = files.get("run.yaml", "")
-        cmd_line = "python code.py"
-        for line in ry.splitlines():
-            if line.strip().startswith("command:"):
-                cmd_line = line.split(":", 1)[1].strip()
-                break
-        inner = f"if [ -s /w/requirements.txt ]; then pip install -q -r /w/requirements.txt 2>&1 | tail -3; fi; {cmd_line} 2>&1"
+        cfg = parse_run_yaml(files.get("run.yaml", ""))
+        if cfg.get("command"):
+            full = cfg["command"] + (f" {cfg.get('args', '')}" if cfg.get("args") else "")
+            runtime = cfg.get("runtime", "python") or "python"
+        else:
+            entry = cfg.get("entry", "code.py")
+            import os as _os2
+            runtime = cfg.get("runtime", "") or EXT_RUNTIME.get(_os2.path.splitext(entry)[1].lower(), "python")
+            args = cfg.get("args", "")
+            full = f"{runtime} {entry}" + (f" {args}" if args else "")
+        images = runtime_images()
+        if runtime not in images:
+            api(f"/api/worker/job/{jid}/result", {"log": f"unknown runtime: {runtime}", "exit_code": 125, "status": "failed", "minutes": 0}, method="POST")
+            return
+        image = images[runtime]
+        inner = f"if [ -s /w/requirements.txt ]; then pip install -q -r /w/requirements.txt 2>&1 | tail -3; fi; {full} 2>&1"
         net = job.get("net", "proxied")
         cmd = ["docker", "run", "--rm", "--memory", "12g", "--cpus", "4",
                "--pids-limit", "512", "--security-opt", "no-new-privileges:true",
@@ -40,7 +72,7 @@ def run_one(job):
             cmd += ["--network", "none"]
         else:
             cmd += ["-e", f"HTTP_PROXY={SQUID}", "-e", f"HTTPS_PROXY={SQUID}"]
-        cmd += [BASE, "bash", "-c", "pip install -q -r /w/requirements.txt 2>&1 | tail -3; python /w/code.py 2>&1"]
+        cmd += [image, "bash", "-c", inner]
         start = time.time()
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=2 * 3600)

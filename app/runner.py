@@ -43,24 +43,64 @@ def _parse_run_yaml(d: Path) -> dict:
             out[k.strip()] = v.strip().strip("'\"")
     return out
 
+def runtime_images():
+    m = {}
+    for item in os.environ.get("RUNNER_RUNTIMES", "").split(","):
+        item = item.strip()
+        if "=" in item:
+            k, v = item.split("=", 1)
+            m[k.strip()] = v.strip()
+    m.setdefault("python", BASE_IMAGE)
+    m.setdefault("node", "node:22-slim")
+    m.setdefault("bash", "ubuntu:22.04")
+    return m
+
+EXT_RUNTIME = {".py": "python", ".js": "node", ".mjs": "node", ".sh": "bash"}
+
+def job_command(cfg, d):
+    """shell line to run + runtime key. command: wins, else runtime+entry."""
+    if cfg.get("command"):
+        full = cfg["command"] + (f" {cfg.get('args', '')}" if cfg.get("args") else "")
+        return full, cfg.get("runtime", "python") or "python"
+    entry = cfg.get("entry", "code.py")
+    if entry != "code.py" and (d / entry).exists():
+        shutil.copy(d / entry, d / "code.py")
+    runtime = cfg.get("runtime", "") or EXT_RUNTIME.get(Path(entry).suffix.lower(), "python")
+    args = cfg.get("args", "")
+    return f"{runtime} {entry}" + (f" {args}" if args else ""), runtime
+
+def _read_extra(d: Path) -> str:
+    parts = []
+    for name in ("run.yaml", "requirements.txt"):
+        p = d / name
+        if p.exists():
+            parts.append(f"\n# --- {name} ---\n" + p.read_text(errors="replace")[:20_000])
+    return "".join(parts)
+
 def process_one(jid) -> bool:
     job = db.get_job(jid)
     if not job or job["status"] not in ("queued",):
         return False
     d = job_dir(jid)
     code = _read_code(d)
-    if not code.strip():
+    cfg = _parse_run_yaml(d)
+    if not code.strip() and not cfg.get("command"):
         db.set_job(jid, status="failed", review="empty submission", ended=time.time())
         return True
     db.set_job(jid, status="reviewing")
-    cfg = _parse_run_yaml(d)
     net = (cfg.get("net") or job["net"] or "proxied").lower()
     if net not in ("offline", "proxied", "open"):
         net = "proxied"
     if net == "open" and not ALLOW_OPEN:
         net = "proxied"
     db.set_job(jid, net=net)
-    score, reasons = review(code, net)
+    _, runtime = job_command(cfg, d)
+    if runtime not in runtime_images():
+        msg = f"unknown runtime: {runtime} (allowed: {', '.join(sorted(runtime_images()))})"
+        db.set_job(jid, score=80, review=msg, status="rejected", ended=time.time())
+        (d / "stdout.log").write_text("REJECTED by review:\n" + msg)
+        return True
+    score, reasons = review(code + _read_extra(d), net)
     db.set_job(jid, score=score, review="\n".join(reasons)[:2000])
     if score >= 70:
         db.set_job(jid, status="rejected", ended=time.time())
@@ -83,20 +123,18 @@ def run_job(jid) -> bool:
     d = job_dir(jid)
     cfg = _parse_run_yaml(d)
     minutes = int(cfg.get("minutes_limit", DEFAULT_MIN))
-    args = cfg.get("args", "")
-    command = cfg.get("command", "")
-    if not command:
-        entry = cfg.get("entry", "code.py")
-        if entry != "code.py" and (d / entry).exists():
-            shutil.copy(d / entry, d / "code.py")
-        command = "python code.py"
-    full = command + (f" {args}" if args else "")
+    full, runtime = job_command(cfg, d)
+    images = runtime_images()
+    if runtime not in images:
+        (d / "stdout.log").write_text(f"unknown runtime: {runtime}")
+        db.set_job(jid, status="failed", exit_code=125, ended=time.time())
+        return True
     mode = os.environ.get("RUNNER_MODE", "docker")
     db.set_job(jid, status="running", started=time.time())
     logf = d / "stdout.log"
     try:
         if mode == "docker":
-            _run_docker(jid, d, job, minutes, full, logf)
+            _run_docker(jid, d, job, minutes, full, images[runtime], logf)
         else:
             _run_subprocess(jid, d, job, minutes, full, logf)
     except Exception as e:
@@ -106,7 +144,7 @@ def run_job(jid) -> bool:
         return True
     return True
 
-def _docker_cmd(jid, d: Path, job: dict, minutes: int, full: str):
+def _docker_cmd(jid, d: Path, job: dict, minutes: int, full: str, image: str):
     net = job["net"]
     mem = os.environ.get("JOB_MEMORY", "12g")
     cpus = os.environ.get("JOB_CPUS", "4")
@@ -126,11 +164,11 @@ def _docker_cmd(jid, d: Path, job: dict, minutes: int, full: str):
         cmd += ["-e", f"HTTP_PROXY={SQUID_URL}", "-e", f"HTTPS_PROXY={SQUID_URL}",
                 "-e", "NO_PROXY=localhost,127.0.0.1",
                 "-e", f"DUCKAI_USER={job['user']}", "-e", f"DUCKAI_JOB={jid}"]
-    cmd += [BASE_IMAGE, "bash", "-c", inner]
+    cmd += [image, "bash", "-c", inner]
     return cmd, minutes * 60
 
-def _run_docker(jid, d, job, minutes, full, logf):
-    cmd, timeout = _docker_cmd(jid, d, job, minutes, args)
+def _run_docker(jid, d, job, minutes, full, image, logf):
+    cmd, timeout = _docker_cmd(jid, d, job, minutes, full, image)
     start = time.time()
     with open(logf, "w") as f:
         f.write(f"$ {' '.join(cmd)}\n[net={job['net']} user={job['user']}]\n\n")
