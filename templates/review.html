@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block t %}- review{% endblock %}{% block b %}
+<h3>review stream</h3>
+<table><tr><th>id</th><th>title</th><th>user</th><th>net</th><th>status</th><th>score</th><th></th><th></th></tr>
+<tbody id="rows">{% include "_review_rows.html" %}</tbody></table>
+{% endblock %}{% block js %}<script>
+setInterval(async()=>{try{const r=await fetch('/review/rows');if(r.ok){document.getElementById('rows').innerHTML=await r.text();}}catch(e){}},4000);
+</script>{% endblock %}

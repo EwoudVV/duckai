@@ -1,0 +1,6 @@
+{% for j in jobs %}<tr><td><a href="/job/{{ j.id }}">{{ j.id }}</a></td><td>{{ j.title }}</td><td>{{ j.user }}</td><td>{{ j.net }}</td>
+<td><span class="pill {{ j.status }}">{{ j.status }}</span></td><td>{{ j.score }}</td>
+<td><details><summary>review</summary><pre>{{ j.review or '(pending)' }}</pre></details></td>
+<td style="white-space:nowrap">{% if j.status in ('waiting-approval', 'rejected') %}<form method="post" action="/job/{{ j.id }}/approve" style="display:inline"><input type="hidden" name="next" value="/review"><button style="padding:2px 8px">approve</button></form>{% endif %}
+{% if j.status in ('queued', 'reviewing', 'waiting-approval', 'approved', 'running') %}<form method="post" action="/job/{{ j.id }}/reject" style="display:inline"><input type="hidden" name="next" value="/review"><button style="padding:2px 8px">reject</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="8" class="muted">nothing yet</td></tr>{% endfor %}

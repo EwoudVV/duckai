@@ -143,25 +143,59 @@ def job_log(req: Request, jid: int):
     return PlainTextResponse(p.read_text(errors="replace")[-100_000:] if p.exists() else "(no logs yet)")
 
 @app.post("/job/{jid}/approve")
-def approve(req: Request, jid: int):
+def approve(req: Request, jid: int, next: str = Form("/")):
     ident = require_user(req)
     if not ident or not ident["admin"]:
         return PlainTextResponse("admin only", status_code=403)
     job = db.get_job(jid)
-    if job and job["status"] == "waiting-approval":
+    if job and job["status"] in ("waiting-approval", "rejected"):
         db.set_job(jid, status="approved")
         # local loop or remote gpu worker picks up `approved`
-    return RedirectResponse(f"/job/{jid}?token={ident['token']}", status_code=303)
+    if not next.startswith("/") or next.startswith("//"):
+        next = f"/job/{jid}"
+    return RedirectResponse(next, status_code=303)
+
+@app.post("/job/{jid}/reject")
+def reject(req: Request, jid: int, next: str = Form("/")):
+    ident = require_user(req)
+    if not ident or not ident["admin"]:
+        return PlainTextResponse("admin only", status_code=403)
+    job = db.get_job(jid)
+    if job and job["status"] in ("queued", "reviewing", "waiting-approval", "approved", "running"):
+        if job["status"] == "running":
+            import subprocess
+            subprocess.run(["docker", "rm", "-f", f"duckai-{jid}"], capture_output=True)
+        db.set_job(jid, status="rejected", ended=time.time(),
+                   review=((job["review"] or "") + "\nrejected by admin")[:2000])
+    if not next.startswith("/") or next.startswith("//"):
+        next = f"/job/{jid}"
+    return RedirectResponse(next, status_code=303)
 
 @app.post("/job/{jid}/kill")
-def kill(req: Request, jid: int):
+def kill(req: Request, jid: int, next: str = Form("/")):
     ident = require_user(req)
     if not ident or not ident["admin"]:
         return PlainTextResponse("admin only", status_code=403)
     import subprocess
     subprocess.run(["docker", "rm", "-f", f"duckai-{jid}"], capture_output=True)
     db.set_job(jid, status="failed", review="killed by admin", ended=time.time())
-    return RedirectResponse(f"/job/{jid}?token={ident['token']}", status_code=303)
+    if not next.startswith("/") or next.startswith("//"):
+        next = f"/job/{jid}"
+    return RedirectResponse(next, status_code=303)
+
+@app.get("/review", response_class=HTMLResponse)
+def review_stream(req: Request):
+    ident = require_user(req)
+    if not ident or not ident["admin"]:
+        return PlainTextResponse("admin only", status_code=403)
+    return templates.TemplateResponse(req, "review.html", {"me": ident, "jobs": db.list_jobs(30)})
+
+@app.get("/review/rows", response_class=HTMLResponse)
+def review_rows(req: Request):
+    ident = require_user(req)
+    if not ident or not ident["admin"]:
+        return PlainTextResponse("admin only", status_code=403)
+    return templates.TemplateResponse(req, "_review_rows.html", {"jobs": db.list_jobs(30)})
 
 @app.get("/stats", response_class=HTMLResponse)
 def stats_page(req: Request):

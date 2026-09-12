@@ -1,11 +1,14 @@
 {% extends "base.html" %}{% block t %}- job {{ job.id }}{% endblock %}{% block b %}
 <h3>#{{ job.id }} {{ job.title }} <span class="pill {{ job.status }}">{{ job.status }}</span></h3>
 <p class="muted">user {{ job.user }} · net {{ job.net }} · score {{ job.score }} · exit {{ job.exit_code }}</p>
-{% if me.admin and job.status == 'waiting-approval' %}
-<form method="post" action="/job/{{ job.id }}/approve" style="display:inline"><button>approve + run</button></form>
+{% if me.admin and job.status in ('waiting-approval', 'rejected') %}
+<form method="post" action="/job/{{ job.id }}/approve" style="display:inline"><input type="hidden" name="next" value="/job/{{ job.id }}"><button>approve + run</button></form>
+{% endif %}
+{% if me.admin and job.status in ('queued', 'reviewing', 'waiting-approval', 'approved') %}
+<form method="post" action="/job/{{ job.id }}/reject" style="display:inline"><input type="hidden" name="next" value="/job/{{ job.id }}"><button>reject</button></form>
 {% endif %}
 {% if me.admin and job.status == 'running' %}
-<form method="post" action="/job/{{ job.id }}/kill" style="display:inline"><button>kill</button></form>
+<form method="post" action="/job/{{ job.id }}/kill" style="display:inline"><input type="hidden" name="next" value="/job/{{ job.id }}"><button>kill</button></form>
 {% endif %}
 <h4>review</h4><pre>{{ job.review or '(pending)' }}</pre>
 <h4>log</h4><pre id="log">{{ log }}</pre>
