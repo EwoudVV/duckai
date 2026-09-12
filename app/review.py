@@ -11,7 +11,8 @@ BLOCK = [
     (r"nmap|masscan|port.?scan|hydra|sqlmap", "scanning/bruteforce tools"),
     (r"xmrig|minerd|cgminer|nicehash|stratum\+tcp", "crypto miner"),
     (r"metasploit|msfvenom|mimikatz|bloodhound", "offsec tooling"),
-    (r"ngrok|chisel|frp|reverse.?shell|/dev/tcp/", "tunneling/reverse shell"),
+    (r"ngrok|chisel|frp|/dev/tcp/", "tunneling tool"),
+    (r"os\.dup2|dup2\s*\(", "fd redirection (reverse-shell behavior)"),
     (r"discord.*webhook|telegram.*bot.*token", "webhook exfil pattern"),
     (r"rm\s+-rf\s+/( |$)|mkfs|:?\(\)\{\s*:\|\:&\s*\};:", "destructive command"),
     (r"while\s+True.*requests\.(get|post)", "tight outbound loop"),
@@ -111,9 +112,9 @@ def ollama_judge(code: str, net: str) -> tuple[int, list]:
         return 0, [f"ollama unavailable, heuristic only ({e.__class__.__name__})"]
 
 def review(code: str, net: str):
+    # Heuristic never auto-rejects alone: it scores, the AI judges.
+    # Final = max of both, so spicy-looking-but-benign code gets a real verdict.
     h_score, h_reasons = heuristic(code)
-    if h_score >= 70:
-        return h_score, h_reasons + ["auto-reject threshold (heuristic)"]
     r = api_judge(code, net)
     if r is not None:
         score, o_reasons = r
