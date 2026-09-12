@@ -41,6 +41,9 @@ async def track(req: Request, call_next):
 def _startup():
     db.init()
     Path("./artifacts").mkdir(parents=True, exist_ok=True)
+    # crash/restart recovery: reviewing/running at shutdown never finished
+    with db.conn() as c:
+        c.execute("UPDATE jobs SET status='queued' WHERE status IN ('reviewing','running')")
     runner_start()
 
 def ident_or_login(req: Request, tmpl: str):
@@ -295,6 +298,15 @@ def worker_next(req: Request):
             db.set_job(j["id"], status="running", started=time.time())
             return db.get_job(j["id"])
     return {"none": True}
+
+@app.get("/api/worker/job/{jid}/status")
+def worker_status(req: Request, jid: int):
+    if not is_worker(req):
+        return JSONResponse({"err": "auth"}, status_code=401)
+    job = db.get_job(jid)
+    if not job:
+        return JSONResponse({"err": "not found"}, status_code=404)
+    return {"status": job["status"]}
 
 @app.get("/api/worker/job/{jid}/files")
 def worker_files(req: Request, jid: int):

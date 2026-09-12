@@ -120,6 +120,8 @@ def run_job(jid) -> bool:
     job = db.get_job(jid)
     if not job:
         return False
+    if job["status"] == "rejected":
+        return True  # admin overruled while queued
     d = job_dir(jid)
     cfg = _parse_run_yaml(d)
     minutes = int(cfg.get("minutes_limit", DEFAULT_MIN))
@@ -173,10 +175,24 @@ def _run_docker(jid, d, job, minutes, full, image, logf):
     with open(logf, "w") as f:
         f.write(f"$ {' '.join(cmd)}\n[net={job['net']} user={job['user']}]\n\n")
     proc = subprocess.Popen(cmd, stdout=open(logf, "a"), stderr=subprocess.STDOUT)
-    try:
-        proc.wait(timeout=timeout)
-        code = proc.returncode
-    except subprocess.TimeoutExpired:
+    code, preempted, waited = None, False, 0
+    while waited < timeout:
+        try:
+            code = proc.wait(timeout=5)
+            break
+        except subprocess.TimeoutExpired:
+            waited += 5
+        cur = db.get_job(jid)
+        if not cur or cur["status"] != "running":
+            preempted = True
+            proc.kill()
+            proc.wait()
+            with open(logf, "a") as f:
+                f.write("\n[STOPPED by admin]\n")
+            break
+    if preempted:
+        return True  # leave admin's status alone
+    if code is None:
         proc.kill()
         with open(logf, "a") as f:
             f.write(f"\n[TIME LIMIT {minutes}min]\n")

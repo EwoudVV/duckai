@@ -40,6 +40,12 @@ def runtime_images():
 
 EXT_RUNTIME = {".py": "python", ".js": "node", ".mjs": "node", ".sh": "bash"}
 
+def _status(jid):
+    try:
+        return api(f"/api/worker/job/{jid}/status")["status"]
+    except Exception:
+        return "running"  # fail-open on net blip; admin can't reject during outage anyway
+
 def run_one(job):
     jid = job["id"]
     print(f"job {jid} {job['title']} net={job['net']}", flush=True)
@@ -63,9 +69,13 @@ def run_one(job):
             api(f"/api/worker/job/{jid}/result", {"log": f"unknown runtime: {runtime}", "exit_code": 125, "status": "failed", "minutes": 0}, method="POST")
             return
         image = images[runtime]
+        if _status(jid) != "running":
+            print(f"job {jid} preempted before start", flush=True)
+            return
         inner = f"if [ -s /w/requirements.txt ]; then pip install -q -r /w/requirements.txt 2>&1 | tail -3; fi; {full} 2>&1"
         net = job.get("net", "proxied")
-        cmd = ["docker", "run", "--rm", "--memory", "12g", "--cpus", "4",
+        cmd = ["docker", "run", "--rm", "--name", f"duckai-{jid}",
+               "--memory", "12g", "--cpus", "4",
                "--pids-limit", "512", "--security-opt", "no-new-privileges:true",
                "--gpus", "all", "-v", f"{d}:/w:ro", "-w", "/w"]
         if net == "offline":
@@ -74,11 +84,30 @@ def run_one(job):
             cmd += ["-e", f"HTTP_PROXY={SQUID}", "-e", f"HTTPS_PROXY={SQUID}"]
         cmd += [image, "bash", "-c", inner]
         start = time.time()
-        try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=2 * 3600)
-            log, code = (p.stdout + p.stderr)[-500_000:], p.returncode
-        except subprocess.TimeoutExpired as e:
-            log, code = ((e.stdout or "") + (e.stderr or "") + "\n[TIME LIMIT]\n")[-500_000:], 124
+        logf = d / "stdout.log"
+        with open(logf, "w") as f:
+            proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+        code, preempted, deadline = None, False, start + 2 * 3600
+        while True:
+            if proc.poll() is not None:
+                code = proc.returncode
+                break
+            if time.time() > deadline or _status(jid) != "running":
+                preempted = time.time() <= deadline
+                subprocess.run(["docker", "rm", "-f", f"duckai-{jid}"], capture_output=True)
+                proc.wait()
+                code = 137 if preempted else 124
+                break
+            time.sleep(10)
+        log = logf.read_text(errors="replace")[-500_000:]
+        if preempted:
+            log += "\n[STOPPED by admin]\n"
+            api(f"/api/worker/job/{jid}/result", {"log": log, "exit_code": code,
+                "status": "rejected", "minutes": max(1, int((time.time() - start) / 60))}, method="POST")
+            print(f"job {jid} preempted", flush=True)
+            return
+        if time.time() > deadline:
+            log += "\n[TIME LIMIT]\n"
         mins = max(1, int((time.time() - start) / 60))
         api(f"/api/worker/job/{jid}/result", {"log": log, "exit_code": code,
             "status": "done" if code == 0 else "failed", "minutes": mins}, method="POST")
